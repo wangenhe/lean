@@ -1,0 +1,501 @@
+---
+title: "Chapter 5"
+author: "weh"
+date: '2022-04-27'
+output: html_document
+---
+>data
+
+```{r}
+# load data and copy 
+library(rethinking) 
+data(WaffleDivorce) 
+d <- WaffleDivorce
+# standardize variables
+d$D <- standardize( d$Divorce ) 
+d$M<- standardize( d$Marriage )
+d$A <- standardize( d$MedianAgeMarriage )
+```
+
+>Divorce rate is associated with median age at marriage  m5.1
+
+```{r}
+m5.1 <- quap(
+    alist(
+        D ~ dnorm( mu , sigma ) ,
+        mu <- a + bA * A ,
+        a ~ dnorm( 0 , 0.2 ) ,
+        bA ~ dnorm( 0 , 0.5 ) ,
+        sigma ~ dexp( 1 )
+    ) , data = d )
+
+# compute percentile interval of mean
+A_seq <- seq( from=-3 , to=3.2 , length.out=30 ) 
+mu <- link( m5.1 , data=list(A=A_seq) )
+mu.mean <- apply( mu , 2, mean ) 
+mu.PI <- apply( mu , 2 , PI )
+# plot it all
+plot( D ~ A , data=d , col=rangi2 ) 
+lines( A_seq , mu.mean , lwd=2 ) 
+shade( mu.PI , A_seq )
+title(ylab =  "                                   Divorce rate",xlab = "                                               Median age marriage")
+```
+
+>Divorce rate is also associated with  Marriage rate     m5.2 
+
+```{r}
+m5.2 <- quap( 
+  alist(
+      D ~ dnorm( mu , sigma ) , 
+      mu <- a + bM * M ,
+      a ~ dnorm( 0 , 0.2 ) , 
+      bM ~ dnorm( 0 , 0.5 ) , 
+      sigma ~ dexp( 1 )
+  ) , data = d )
+
+
+M_seq <- seq( from=-3 , to=3.2 , length.out=30 ) 
+mu <- link( m5.2 , data=list(M=M_seq) )
+mu.mean <- apply( mu , 2, mean ) 
+mu.PI <- apply( mu , 2 , PI )
+# plot it all
+plot( D ~ M , data=d , col=rangi2 ) 
+lines( M_seq , mu.mean , lwd=2 ) 
+shade( mu.PI , M_seq )
+title(ylab =  "                                   Divorce rate",xlab = "                                               Marriage rate")
+``` 
+
+>DAG Directed Acyclic Graph no.1 
+
+```{r}
+library(dagitty)
+dag5.1 <- dagitty( "dag{ A -> D; A -> M; M -> D }" )
+coordinates(dag5.1) <- list( x=c(A=0,D=1,M=2) , y=c(A=0,D=1,M=0) ) 
+drawdag( dag5.1 )
+```
+
+>DAG Directed Acyclic Graph  no.2
+
+```{r}
+dag5.2 <- dagitty( "dag{ A -> D; A -> M}" )
+coordinates(dag5.2) <- list( x=c(A=0,D=1,M=2) , y=c(A=0,D=1,M=0) ) 
+drawdag( dag5.2 )
+```
+
+>correlation no.1 and no,2 (the same)
+
+```{r}
+cor(d$A,d$D)
+cor(d$A,d$M)
+cor(d$M,d$D)
+```
+
+>impliedConditionalIndependencies
+ no.2 DAG    D _||_ M | A
+
+```{r}
+DMA_dag2 <- dagitty('dag{ D <- A -> M }') 
+impliedConditionalIndependencies( DMA_dag2 )
+```
+
+>impliedConditionalIndependencies
+ no.1 DAG     no conditional independencies, so there is no output to display.
+
+```{r}
+DMA_dag1 <- dagitty('dag{ D <- A -> M -> D }') 
+impliedConditionalIndependencies( DMA_dag1 )
+```
+
+>Divorce rate is associated with median age at marriage & Marriage rate   m5.3
+
+```{r}
+m5.3 <- quap( 
+  alist(
+        D ~ dnorm( mu , sigma ) , 
+        mu <- a + bM*M + bA*A , 
+        a ~ dnorm( 0 , 0.2 ) , 
+        bM ~ dnorm( 0 , 0.5 ) , 
+        bA ~ dnorm( 0 , 0.5 ) , 
+        sigma ~ dexp( 1 )
+      ) , data = d ) 
+precis( m5.3 )
+```
+
+>focusing just on the slope parameters βA and βM :
+
+```{r}
+plot( coeftab(m5.1,m5.2,m5.3), par=c("bA","bM") )
+```
+
+
+
+```{r}
+m5.4 <- quap( 
+alist(
+M ~ dnorm( mu , sigma ) , 
+mu <- a + bAM * A ,
+a ~ dnorm( 0 , 0.2 ) , 
+bAM ~ dnorm( 0 , 0.5 ) , 
+sigma ~ dexp( 1 )
+) , data = d )
+```
+
+```{r}
+mu <- link(m5.4)
+mu_mean <- apply( mu , 2 , mean ) 
+mu_resid <- d$M - mu_mean
+```
+
+
+
+>(2) posterior prediction plot
+produce a simple posterior predictive check in the divorce example
+  begin by simulating predictions, averaging over the posterior.
+
+```{r}
+# call link without specifying new data 
+# so it uses original data
+mu <- link( m5.3 )
+# summarize samples across cases 
+mu_mean <- apply( mu , 2 , mean ) 
+mu_PI <- apply( mu , 2 , PI )
+# simulate observations
+# again no new data, so uses original data 
+D_sim <- sim( m5.3 , n=1e4 )
+D_PI <- apply( D_sim , 2 , PI )
+```
+
+```{r}
+plot( mu_mean ~ d$D , col=rangi2 , ylim=range(mu_PI) , 
+xlab="Observed divorce" , ylab="Predicted divorce" )
+abline( a=0 , b=1 , lty=2 )
+for ( i in 1:nrow(d) ) lines( rep(d$D[i],2) , mu_PI[,i] , col=rangi2 )
+```
+
+
+
+>(3) Counterfactual plots
+
+>step(1) pick "A" as intervention variable.
+ 
+```{r}
+m5.3_A <- quap(
+  alist(
+     ## A -> D <- M
+        D ~ dnorm( mu , sigma ) , 
+        mu <- a + bM*M + bA*A , 
+        a ~ dnorm( 0 , 0.2 ) , 
+        bM ~ dnorm( 0 , 0.5 ) , 
+        bA ~ dnorm( 0 , 0.5 ) , 
+        sigma ~ dexp( 1 ),
+     ## A -> M
+        M ~ dnorm( mu_M , sigma_M ), 
+        mu_M <- aM + bAM*A,
+        aM ~ dnorm( 0 , 0.2 ), 
+        bAM ~ dnorm( 0 , 0.5 ), 
+        sigma_M ~ dexp( 1 )
+     ) , data = d )
+
+```
+
+>step(2)   Define the range of values to set the intervention variable to.
+
+```{r}
+A_seq <- seq( from=-2 , to=2 , length.out=30 )
+```
+>step(3)use the causal model to simulate the values of other variables(excpet A), including the outcome.
+
+```{r}
+# prep data
+sim_dat <- data.frame( A=A_seq ) 
+# simulate M and then D, using A_seq
+s <- sim( m5.3_A , data=sim_dat , vars=c("M","D") )
+```
+
+> total counterfactual effect of A on D & M, 图
+
+```{r}
+plot( sim_dat$A , colMeans(s$D) , ylim=c(-2,2) , type="l" , 
+xlab="manipulated A" , ylab="counterfactual D" )
+shade( apply(s$D,2,PI) , sim_dat$A )
+mtext( "Total counterfactual effect of A on D" )
+
+plot( sim_dat$A , colMeans(s$M) , ylim=c(-2,2) , type="l" , 
+xlab="manipulated A" , ylab="counterfactual M" )
+shade( apply(s$M,2,PI) , sim_dat$A )
+mtext( "Total counterfactual effect of A on M" )
+```
+
+
+#########################################################
+#########################################################
+##         MILK 
+#########################################################
+#########################################################
+
+>data
+
+```{r}
+library(rethinking) 
+data(milk)
+d <- milk 
+
+d$K <- standardize( d$kcal.per.g ) 
+d$N <- standardize( d$neocortex.perc ) 
+d$M <- standardize( log(d$mass) )
+```
+
+>model with error ( a lot of NA)
+
+```{r}
+m5.5_draft <- quap( 
+alist(
+K ~ dnorm( mu , sigma ) , 
+mu <- a + bN*N ,
+a ~ dnorm( 0 , 1 ) , 
+bN ~ dnorm( 0 , 1 ) , 
+sigma ~ dexp( 1 )
+) , data=d )
+## there us a lot of NA in d$neocortex.perc
+
+```
+
+>dealing with NA,droping any cases with missing value(NA)
+
+```{r}
+dcc <- d[ complete.cases(d$K,d$N,d$M) , ]
+d$neocortex.perc
+print("---------------------------------------------------------------------")
+dcc$neocortex.perc
+```
+
+>model (without NA) (DRAFT with BAD prior α & βN)
+
+```{r}
+m5.5_draft <- quap( 
+                     alist(
+                           K ~ dnorm( mu , sigma ) , 
+                           mu <- a + bN*N ,
+                           a ~ dnorm( 0 , 1 ) , 
+                           bN ~ dnorm( 0 , 1 ) , 
+                           sigma ~ dexp( 1 )
+                   ) , data=dcc )
+
+prior <- extract.prior( m5.5_draft ) 
+xseq <- c(-2,2)
+mu <- link( m5.5_draft , post=prior , data=list(N=xseq) )
+plot( NULL , xlim=xseq , ylim=xseq )
+for ( i in 1:50 ) lines( xseq , mu[i,] , col=col.alpha("black",0.3) )
+```
+
+>model (without NA) (DRAFT with better prior α & βN )
+
+```{r}
+m5.5 <- quap( 
+alist(
+K ~ dnorm( mu , sigma ) , 
+mu <- a + bN*N ,
+a ~ dnorm( 0 , 0.2 ) , 
+bN ~ dnorm( 0 , 0.5) , 
+sigma ~ dexp( 1 )
+) , data=dcc )
+
+prior <- extract.prior( m5.5) 
+xseq <- c(-2,2)
+mu <- link( m5.5 , post=prior , data=list(N=xseq) )
+plot( NULL , xlim=xseq , ylim=xseq )
+for ( i in 1:50 ) lines( xseq , mu[i,] , col=col.alpha("black",0.3) )
+```
+
+>posteriors:
+>plot K-N
+
+```{r}
+precis( m5.5 )
+
+xseq <- seq( from=min(dcc$N)-0.15 , to=max(dcc$N)+0.15 , length.out=30 ) 
+mu <- link( m5.5 , data=list(N=xseq) )
+mu_mean <- apply(mu,2,mean) 
+mu_PI <- apply(mu,2,PI)
+plot( K ~ N , data=dcc ) 
+lines( xseq , mu_mean , lwd=2 ) 
+shade( mu_PI , xseq )
+```
+>plot K-M
+
+```{r}
+m5.6 <- quap( 
+alist(
+      K ~ dnorm( mu , sigma ) , 
+      mu <- a + bM*M ,
+      a ~ dnorm( 0 , 0.2 ) , 
+      bM ~ dnorm( 0 , 0.5 ) , 
+      sigma ~ dexp( 1 )
+      ) , data=dcc ) 
+xseq <- seq( from=min(dcc$M)-0.15 , to=max(dcc$M)+0.15 , length.out=30 ) 
+mu <- link( m5.6 , data=list(M=xseq) )
+mu_mean <- apply(mu,2,mean) 
+mu_PI <- apply(mu,2,PI)
+plot( K ~ M , data=dcc ) 
+lines( xseq , mu_mean , lwd=2 ) 
+shade( mu_PI , xseq )
+```
+
+
+
+>µi   =  α + βN Ni  + βM Mi
+>plot    K-N(M=0);   K-M(N=0)
+
+```{r}
+m5.7 <- quap( 
+alist(
+K ~ dnorm( mu , sigma ) , 
+mu <- a + bN*N + bM*M , 
+a ~ dnorm( 0 , 0.2 ) , 
+bN ~ dnorm( 0 , 0.5 ) , 
+bM ~ dnorm( 0 , 0.5 ) , 
+sigma ~ dexp( 1 )
+) , data=dcc ) 
+precis(m5.7)
+
+xseq <- seq( from=min(dcc$M)-0.15 , to=max(dcc$M)+0.15 , length.out=30 ) 
+mu <- link( m5.7 , data=data.frame( M=0 , N=xseq ) )
+mu_mean <- apply(mu,2,mean) 
+mu_PI <- apply(mu,2,PI)
+plot( NULL , xlim=range(dcc$M) , ylim=range(dcc$K) ) 
+lines( xseq , mu_mean , lwd=2 )
+shade( mu_PI , xseq )
+
+xseq <- seq( from=min(dcc$M)-0.15 , to=max(dcc$M)+0.15 , length.out=30 ) 
+mu <- link( m5.7 , data=data.frame( M=xseq , N=0 ) )
+mu_mean <- apply(mu,2,mean) 
+mu_PI <- apply(mu,2,PI)
+plot( NULL , xlim=range(dcc$M) , ylim=range(dcc$K) ) 
+lines( xseq , mu_mean , lwd=2 )
+shade( mu_PI , xseq )
+
+```
+
+>coefficient tabel
+
+```{r}
+plot( coeftab( m5.5 , m5.6 , m5.7 ) , pars=c("bM","bN") )
+```
+
+```{r}
+
+pairs( ~K + M + N , dcc )
+```
+
+
+
+
+
+
+
+```{r}
+# M -> K <- N 
+# M -> N
+n <- 100
+M <- rnorm( n )
+N <- rnorm( n , M ) 
+K <- rnorm( n , N - M )
+d_sim <- data.frame(K=K,N=N,M=M)
+```
+
+```{r}
+# M -> K <- N 
+# N -> M
+n <- 100
+N <- rnorm( n )
+M <- rnorm( n , N ) 
+K <- rnorm( n , N - M )
+d_sim2 <- data.frame(K=K,N=N,M=M) 
+```
+
+```{r}
+# M -> K <- N
+# M <- U -> N 
+n <- 100
+U <- rnorm( n )
+N <- rnorm( n , U ) 
+M <- rnorm( n , U ) 
+K <- rnorm( n , N - M )
+d_sim3 <- data.frame(K=K,N=N,M=M)
+```
+
+```{r}
+dag5.7 <- dagitty( "dag{
+M -> K <- N 
+M -> N }" )
+coordinates(dag5.7) <- list( x=c(M=0,K=1,N=2) , y=c(M=0.5,K=1,N=0.5) ) 
+MElist <- equivalentDAGs(dag5.7)
+```
+
+```{r}
+ drawdag(MElist)
+```
+
+>clade
+
+```{r}
+levels(d$clade)
+d$clade_id <- as.integer( d$clade )
+d$clade_id 
+```
+
+
+```{r}
+d$K <- standardize( d$kcal.per.g ) 
+m5.9 <- quap(
+alist(
+K ~ dnorm( mu , sigma ), 
+mu <- a[clade_id],
+a[clade_id] ~ dnorm( 0 , 0.5 ), 
+sigma ~ dexp( 1 )
+) , data=d )
+labels <- paste( "a[" , 1:4 , "]:" , levels(d$clade) , sep="" ) 
+plot( precis( m5.9 , depth=2 , pars="a" ) , labels=labels ,
+xlab="expected kcal (std)" )
+```
+
+```{r}
+set.seed(63)
+d$house <- sample( rep(1:4,each=8) , size=nrow(d) )
+d$house 
+```
+
+```{r}
+m5.10 <- quap( 
+alist(
+K ~ dnorm( mu , sigma ),
+mu <- a[clade_id] + h[house], 
+a[clade_id] ~ dnorm( 0 , 0.5 ), 
+h[house] ~ dnorm( 0 , 0.5 ), 
+sigma ~ dexp( 1 )
+) , data=d )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
